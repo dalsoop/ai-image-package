@@ -92,6 +92,9 @@ enum AssetCmd {
         /// 이미지 파일 경로
         #[arg(long)]
         image: Option<String>,
+        /// 이미지 URL (다운로드해서 저장)
+        #[arg(long)]
+        url: Option<String>,
         /// 컨셉 설명 (한글)
         #[arg(long)]
         concept: Option<String>,
@@ -122,7 +125,10 @@ enum AssetCmd {
         name: String,
         /// 확정 이미지 파일 경로
         #[arg(long)]
-        image: String,
+        image: Option<String>,
+        /// 확정 이미지 URL
+        #[arg(long)]
+        url: Option<String>,
     },
 }
 
