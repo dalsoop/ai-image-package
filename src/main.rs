@@ -158,6 +158,22 @@ enum PromptCmd {
     History {
         target: String,
     },
+    /// 7섹션 디렉팅 시트 템플릿 생성
+    Sheet {
+        /// 에셋 이름
+        target: String,
+    },
+    /// 디렉팅 시트 저장 (파일에서 읽기)
+    Brief {
+        /// 에셋 이름
+        target: String,
+        /// 시트 파일 경로 (생략 시 저장된 시트 보기)
+        #[arg(long)]
+        file: Option<String>,
+        /// 직접 텍스트 입력
+        #[arg(long)]
+        text: Option<String>,
+    },
 }
 
 // === SKILL ===
