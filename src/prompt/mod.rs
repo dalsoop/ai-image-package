@@ -315,7 +315,47 @@ fn save(target: &str, text: &str, memo: Option<String>) {
     let char_count = text.len();
     let within_limit = char_count <= MIDJOURNEY_LIMIT;
 
-    // 버전 번호 계산
+    // === 하드 강제 1: 스타일 접두사 설정 필수 ===
+    let meta_path = dir.join("project.json");
+    if let Ok(json) = fs::read_to_string(&meta_path) {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&json) {
+            let prefix = meta["style_prefix"].as_str().unwrap_or("");
+            if prefix.is_empty() {
+                eprintln!("❌ 스타일 접두사가 설정되지 않았습니다. 프롬프트 저장 거부.");
+                eprintln!("   먼저 `{} project style \"키워드\"` 로 설정하세요.", crate::BIN_NAME);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // === 하드 강제 2: 7섹션 구조 필수 ===
+    let missing_sections: Vec<&&str> = SECTIONS.iter()
+        .filter(|s| !text.contains(*s))
+        .collect();
+    if !missing_sections.is_empty() {
+        eprintln!("❌ 7섹션 디렉팅 시트 구조가 아닙니다. 프롬프트 저장 거부.");
+        eprintln!("   누락된 섹션:");
+        for s in &missing_sections {
+            eprintln!("     {}", s);
+        }
+        eprintln!();
+        eprintln!("   `{} prompt sheet {}` 로 템플릿을 생성하세요.", crate::BIN_NAME, target);
+        std::process::exit(1);
+    }
+
+    // === 하드 강제 3: 규칙 엔진 error 시 거부 ===
+    println!("📋 검증:");
+    let validation = validate_prompt_rules(text);
+    print_validation(&validation);
+
+    if !validation.errors.is_empty() {
+        eprintln!();
+        eprintln!("❌ 규칙 위반(error)이 있습니다. 프롬프트 저장 거부.");
+        eprintln!("   위 에러를 수정한 후 다시 시도하세요.");
+        std::process::exit(1);
+    }
+
+    // === 검증 통과 — 저장 ===
     let version = fs::read_dir(&prompts_dir).into_iter().flatten()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with(&format!("{}_v", target)))
@@ -334,21 +374,11 @@ fn save(target: &str, text: &str, memo: Option<String>) {
     let filename = format!("{}_v{:03}.json", target, version);
     fs::write(prompts_dir.join(&filename), serde_json::to_string_pretty(&entry).unwrap()).unwrap();
 
-    let status = if within_limit { "✅" } else { "⚠️ 초과!" };
-    println!("{} 프롬프트 저장: {} (v{})", status, target, version);
-    println!("   글자수: {}/{}", char_count, MIDJOURNEY_LIMIT);
-    if let Some(m) = &entry.memo { println!("   메모: {}", m); }
-
-    // 자동 검증
+    let status = if within_limit { "✅" } else { "⚠️ 글자수 많음 (참고)" };
     println!();
-    println!("📋 검증:");
-    let validation = validate_prompt_rules(text);
-    print_validation(&validation);
-
-    if !validation.errors.is_empty() {
-        println!();
-        println!("  ⚠️  에러가 있지만 저장은 완료됨. 수정 후 새 버전으로 저장하세요.");
-    }
+    println!("{} 프롬프트 저장: {} (v{})", status, target, version);
+    println!("   글자수: {}", char_count);
+    if let Some(m) = &entry.memo { println!("   메모: {}", m); }
 
     crate::git::auto_commit(&format!("prompt: {} v{} 저장", target, version));
 }
