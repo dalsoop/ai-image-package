@@ -16,3 +16,6 @@ chrono = { version = "0.4", features = ["serde"] }
 git2 = "0.20"
 ureq = { version = "3", features = ["rustls"] }
 regex-lite = "0.1"
+
+[build-dependencies]
+hardcoded-lint = { git = "https://github.com/dalsoop/hardcoded-lint" }
