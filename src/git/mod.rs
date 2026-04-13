@@ -104,7 +104,7 @@ pub fn log_summary(count: usize) {
         if i >= count { break; }
         if let Ok(oid) = oid {
             if let Ok(commit) = repo.find_commit(oid) {
-                let msg = commit.message().unwrap_or("(no message)");
+                let msg = commit.message().unwrap_or("(no message)"); // LINT_ALLOW: 표시용
                 let time = commit.time();
                 let ts = chrono::DateTime::from_timestamp(time.seconds(), 0)
                     .map(|dt| dt.format("%m-%d %H:%M").to_string())
