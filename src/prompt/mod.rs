@@ -5,54 +5,80 @@ use std::fs;
 
 const MIDJOURNEY_LIMIT: usize = 6000;
 
-// === 규칙 엔진 구조체 ===
+// === 규칙 엔진 v2 — type 기반 ===
 
 #[derive(Deserialize)]
-struct Rules {
-    temporal_keywords: TemporalRules,
-    duplicate_detection: DuplicateRules,
-    sections: SectionRules,
-    classification: ClassificationRules,
+struct RulesFile {
+    rules: Vec<Rule>,
 }
 
 #[derive(Deserialize)]
-struct TemporalRules {
-    forbidden: Vec<String>,
-    allowed_exceptions: Vec<String>,
-    action: String,
-    message: String,
+struct Rule {
+    id: String,
+    description: String,
+    severity: String, // error / warn / info
+    #[serde(rename = "match")]
+    match_def: MatchDef,
+    actions: Vec<Action>,
 }
 
 #[derive(Deserialize)]
-struct DuplicateRules {
-    min_word_length: usize,
-    ignore_words: Vec<String>,
-    threshold: usize,
-    action: String,
-    message: String,
+#[serde(tag = "type")]
+enum MatchDef {
+    #[serde(rename = "list")]
+    List {
+        keywords: Vec<String>,
+        #[serde(default)]
+        exceptions: Vec<String>,
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
+    #[serde(rename = "section_check")]
+    SectionCheck {
+        sections: Vec<SectionDef>,
+    },
+    #[serde(rename = "duplicate")]
+    Duplicate {
+        min_word_length: usize,
+        threshold: usize,
+        ignore: Vec<String>,
+    },
+    #[serde(rename = "regex")]
+    Regex {
+        pattern: String,
+        #[serde(default)]
+        allowed_values: Vec<String>,
+        #[serde(default)]
+        range: Option<RangeCheck>,
+        #[serde(default)]
+        default: Option<u32>,
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
 }
 
-#[derive(Deserialize)]
-struct SectionRules {
-    required: Vec<SectionDef>,
-}
+fn default_scope() -> String { "all".to_string() }
 
 #[derive(Deserialize)]
 struct SectionDef {
-    name: String,
     marker: String,
     min_length: usize,
-    forbidden_patterns: Vec<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct RangeCheck {
+    min: i64,
+    max: i64,
 }
 
 #[derive(Deserialize)]
-struct ClassificationRules {
-    video_indicators: Vec<String>,
-    temporal_found_action: String,
-    message: String,
+struct Action {
+    r#type: String, // block / warn / info / suggest / message
+    #[serde(default)]
+    text: String,
 }
 
-fn load_rules() -> Option<Rules> {
+fn load_rules() -> Option<RulesFile> {
     let rules_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("rules/image_prompt.json");
     let content = fs::read_to_string(&rules_path).ok()?;
     serde_json::from_str(&content).ok()
@@ -65,118 +91,150 @@ struct ValidationResult {
     suggest_video: bool,
 }
 
+fn extract_section(text: &str, marker: &str) -> Option<String> {
+    text.split(marker).nth(1).map(|after| {
+        after.split("## ").next().unwrap_or("").trim().to_string()
+    })
+}
+
+fn get_search_text<'a>(text: &'a str, scope: &str) -> String {
+    if scope == "all" {
+        text.to_lowercase()
+    } else if let Some(section_name) = scope.strip_prefix("section:") {
+        let marker = format!("## {}", section_name);
+        extract_section(text, &marker).unwrap_or_default().to_lowercase()
+    } else {
+        text.to_lowercase()
+    }
+}
+
 fn validate_prompt_rules(text: &str) -> ValidationResult {
     let mut result = ValidationResult::default();
-    let rules = match load_rules() {
+    let rules_file = match load_rules() {
         Some(r) => r,
         None => { result.warnings.push("규칙 파일 로드 실패 — 검증 건너뜀".to_string()); return result; }
     };
 
-    let lower = text.to_lowercase();
-
-    // 1. 시간 흐름 키워드 감지
-    let mut temporal_found = vec![];
-    for kw in &rules.temporal_keywords.forbidden {
-        let kw_lower = kw.to_lowercase();
-        if lower.contains(&kw_lower) {
-            // 예외 확인
-            let is_exception = rules.temporal_keywords.allowed_exceptions.iter()
-                .any(|ex| lower.contains(&ex.to_lowercase()));
-            if !is_exception {
-                temporal_found.push(kw.clone());
+    for rule in &rules_file.rules {
+        match &rule.match_def {
+            MatchDef::List { keywords, exceptions, scope } => {
+                let search = get_search_text(text, scope);
+                let mut found = vec![];
+                for kw in keywords {
+                    let kw_lower = kw.to_lowercase();
+                    if search.contains(&kw_lower) {
+                        let is_exception = exceptions.iter().any(|ex| search.contains(&ex.to_lowercase()));
+                        if !is_exception {
+                            found.push(kw.clone());
+                        }
+                    }
+                }
+                if !found.is_empty() {
+                    let msgs = collect_messages(&rule.actions);
+                    let detail = format!("[{}] {} — 감지: [{}]", rule.id, msgs, found.join(", "));
+                    push_by_severity(&mut result, &rule.severity, &detail, &rule.actions);
+                }
             }
-        }
-    }
-    if !temporal_found.is_empty() {
-        let msg = format!("{} — 감지: [{}]", rules.temporal_keywords.message, temporal_found.join(", "));
-        if rules.temporal_keywords.action == "reject" {
-            result.errors.push(msg);
-        } else {
-            result.warnings.push(msg);
-        }
-        if rules.classification.temporal_found_action == "suggest_video" {
-            result.suggest_video = true;
-        }
-    }
 
-    // 2. 섹션 완성도 검사
-    for section in &rules.sections.required {
-        if !text.contains(&section.marker) {
-            result.warnings.push(format!("섹션 누락: {}", section.name));
-            continue;
-        }
-        // 섹션 내용 추출
-        let after = text.split(&section.marker).nth(1).unwrap_or("");
-        let content = after.split("## ").next().unwrap_or("").trim();
-        if content.is_empty() || content.starts_with('(') {
-            result.warnings.push(format!("섹션 비어있음: {}", section.name));
-        } else if content.len() < section.min_length {
-            result.warnings.push(format!("섹션 너무 짧음: {} ({}자 < 최소 {}자)", section.name, content.len(), section.min_length));
-        }
+            MatchDef::SectionCheck { sections } => {
+                for sec in sections {
+                    if !text.contains(&sec.marker) {
+                        push_by_severity(&mut result, &rule.severity,
+                            &format!("[{}] 섹션 누락: {}", rule.id, sec.marker), &rule.actions);
+                        continue;
+                    }
+                    let content = extract_section(text, &sec.marker).unwrap_or_default();
+                    if content.is_empty() || content.starts_with('(') {
+                        push_by_severity(&mut result, &rule.severity,
+                            &format!("[{}] 섹션 비어있음: {}", rule.id, sec.marker), &rule.actions);
+                    } else if content.len() < sec.min_length {
+                        push_by_severity(&mut result, &rule.severity,
+                            &format!("[{}] 섹션 짧음: {} ({}자 < {}자)", rule.id, sec.marker, content.len(), sec.min_length), &rule.actions);
+                    }
+                }
+            }
 
-        // 섹션별 금지 패턴
-        if section.forbidden_patterns.contains(&"temporal_keywords".to_string()) {
-            for kw in &rules.temporal_keywords.forbidden {
-                if content.to_lowercase().contains(&kw.to_lowercase()) {
-                    let is_exception = rules.temporal_keywords.allowed_exceptions.iter()
-                        .any(|ex| content.to_lowercase().contains(&ex.to_lowercase()));
-                    if !is_exception {
-                        result.errors.push(format!("{} 섹션에 시간 키워드 '{}' 감지 — 이미지는 한 순간만", section.name, kw));
+            MatchDef::Duplicate { min_word_length, threshold, ignore } => {
+                let section_markers = ["## Style", "## Composition", "## Character Details",
+                    "## Environmental Elements", "## Action Elements",
+                    "## Lighting & Atmosphere", "## Technical Details"];
+
+                let mut word_sections: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+                for marker in &section_markers {
+                    if let Some(content) = extract_section(text, marker) {
+                        let section_name = marker.trim_start_matches("## ");
+                        for word in content.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+                            if word.len() >= *min_word_length && !ignore.contains(&word.to_string()) {
+                                word_sections.entry(word.to_string()).or_default().insert(section_name.to_string());
+                            }
+                        }
+                    }
+                }
+
+                let dups: Vec<_> = word_sections.iter()
+                    .filter(|(_, secs)| secs.len() >= *threshold)
+                    .map(|(w, secs)| format!("'{}' → {}", w, secs.iter().cloned().collect::<Vec<_>>().join(", ")))
+                    .collect();
+
+                if !dups.is_empty() {
+                    let msgs = collect_messages(&rule.actions);
+                    push_by_severity(&mut result, &rule.severity,
+                        &format!("[{}] {} — {}", rule.id, msgs, dups.join("; ")), &rule.actions);
+                }
+            }
+
+            MatchDef::Regex { pattern, allowed_values, range, default, scope } => {
+                let search = get_search_text(text, scope);
+                if let Ok(re) = regex_lite::Regex::new(pattern) {
+                    for cap in re.captures_iter(&search) {
+                        if let Some(val) = cap.get(1) {
+                            let val_str = val.as_str();
+
+                            if !allowed_values.is_empty() && !allowed_values.iter().any(|v| v.to_lowercase() == val_str) {
+                                let msgs = collect_messages(&rule.actions);
+                                push_by_severity(&mut result, &rule.severity,
+                                    &format!("[{}] {} (값: {})", rule.id, msgs, val_str), &rule.actions);
+                            }
+
+                            if let Some(r) = range {
+                                if let Ok(num) = val_str.parse::<i64>() {
+                                    if num < r.min || num > r.max {
+                                        let def = default.map(|d| format!(", 기본값: {}", d)).unwrap_or_default();
+                                        push_by_severity(&mut result, &rule.severity,
+                                            &format!("[{}] 범위 초과: {} (허용: {}~{}{})", rule.id, num, r.min, r.max, def), &rule.actions);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // 3. 중복 키워드 감지
-    let sections_text: Vec<(&str, &str)> = rules.sections.required.iter()
-        .filter_map(|s| {
-            text.split(&s.marker).nth(1).map(|after| {
-                let content = after.split("## ").next().unwrap_or("");
-                (s.name.as_str(), content)
-            })
-        })
-        .collect();
-
-    let mut word_sections: HashMap<String, Vec<String>> = HashMap::new();
-    for (section_name, content) in &sections_text {
-        let words: Vec<String> = content.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.len() >= rules.duplicate_detection.min_word_length)
-            .filter(|w| !rules.duplicate_detection.ignore_words.contains(&w.to_string()))
-            .map(|w| w.to_string())
-            .collect();
-
-        for word in words {
-            word_sections.entry(word).or_default().push(section_name.to_string());
-        }
-    }
-
-    let duplicates: Vec<(String, Vec<String>)> = word_sections.into_iter()
-        .filter(|(_, sections)| {
-            let unique: std::collections::HashSet<_> = sections.iter().collect();
-            unique.len() >= rules.duplicate_detection.threshold
-        })
-        .collect();
-
-    if !duplicates.is_empty() {
-        let dup_list: Vec<String> = duplicates.iter()
-            .map(|(word, secs)| {
-                let unique: std::collections::HashSet<_> = secs.iter().collect();
-                format!("'{}' → {}", word, unique.into_iter().cloned().collect::<Vec<_>>().join(", "))
-            })
-            .collect();
-        result.warnings.push(format!("{} — {}", rules.duplicate_detection.message, dup_list.join("; ")));
-    }
-
-    // 4. 영상 분류 체크
-    for indicator in &rules.classification.video_indicators {
-        if lower.contains(&indicator.to_lowercase()) {
-            result.warnings.push(format!("영상 지표 감지: '{}' — {}", indicator, rules.classification.message));
-        }
-    }
-
     result
+}
+
+fn collect_messages(actions: &[Action]) -> String {
+    actions.iter()
+        .filter(|a| a.r#type == "message" || a.r#type == "suggest")
+        .map(|a| a.text.clone())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn push_by_severity(result: &mut ValidationResult, severity: &str, msg: &str, actions: &[Action]) {
+    match severity {
+        "error" => {
+            result.errors.push(msg.to_string());
+            if actions.iter().any(|a| a.r#type == "suggest" && a.text.contains("avp")) {
+                result.suggest_video = true;
+            }
+        }
+        "warn" => result.warnings.push(msg.to_string()),
+        "info" => result.warnings.push(format!("ℹ️  {}", msg)),
+        _ => result.warnings.push(msg.to_string()),
+    }
 }
 
 fn print_validation(result: &ValidationResult) {

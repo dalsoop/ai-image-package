@@ -1,113 +1,160 @@
 {
   "meta": {
     "name": "이미지 프롬프트 검증 규칙",
-    "version": "1.0.0",
-    "description": "7섹션 디렉팅 시트의 이미지 프롬프트 검증. 시간 흐름 감지, 중복 키워드 감지, 섹션 완성도 검사."
+    "version": "2.0.0"
   },
-  "temporal_keywords": {
-    "description": "이미지 프롬프트에 시간 흐름이 있으면 안 됨. 감지 시 영상 전환 권고.",
-    "forbidden": [
-      "then", "suddenly", "after", "next", "before", "later",
-      "eventually", "finally", "meanwhile", "begins to", "starts to",
-      "transitions to", "shifts to", "changes to", "turns into",
-      "followed by", "moments later", "seconds later",
-      "first then", "second then", "third then",
-      "from A to B", "gradually", "over time",
-      "in sequence", "one by one", "step by step"
-    ],
-    "allowed_exceptions": [
-      "before dawn",
-      "after rain",
-      "golden hour before sunset",
-      "secondary",
-      "first person",
-      "first view",
-      "third person"
-    ],
-    "action": "reject",
-    "message": "시간 흐름 키워드 감지. 이미지는 한 순간만 담아야 합니다. 영상으로 전환하려면 avp를 사용하세요."
-  },
-  "duplicate_detection": {
-    "description": "서로 다른 섹션에서 동일한 키워드가 반복되면 노이즈.",
-    "min_word_length": 4,
-    "ignore_words": [
-      "with", "from", "that", "this", "and", "the", "for",
-      "creating", "detailed", "style", "anime", "light", "lighting",
-      "color", "subtle", "soft", "deep", "high", "space", "character",
-      "hair", "eyes", "face", "body", "skin", "helmet", "suit",
-      "cosmic", "camera", "scene", "background", "realistic", "accurate",
-      "visual", "surface", "elements", "floating", "blue", "white", "dark",
-      "warm", "cold", "cool", "bright", "glow", "glowing"
-    ],
-    "threshold": 3,
-    "action": "warn",
-    "message": "중복 키워드 감지. 섹션 간 역할 분리를 권장합니다."
-  },
-  "sections": {
-    "description": "7섹션 완성도 검사",
-    "required": [
-      {
-        "name": "Style",
-        "marker": "## Style",
-        "min_length": 50,
-        "purpose": "전체 화풍/톤 정의",
-        "forbidden_patterns": []
+  "rules": [
+    {
+      "id": "temporal-flow",
+      "description": "이미지 프롬프트에 시간 흐름 금지",
+      "severity": "error",
+      "match": {
+        "type": "list",
+        "keywords": [
+          "then", "suddenly", "after", "next", "later",
+          "eventually", "finally", "meanwhile", "begins to", "starts to",
+          "transitions to", "shifts to", "changes to", "turns into",
+          "followed by", "moments later", "seconds later",
+          "first then", "second then", "third then",
+          "from A to B", "gradually", "over time",
+          "in sequence", "one by one", "step by step"
+        ],
+        "exceptions": [
+          "before dawn", "after rain", "golden hour before sunset",
+          "secondary", "first person", "first view", "third person"
+        ],
+        "scope": "all"
       },
-      {
-        "name": "Composition",
-        "marker": "## Composition",
-        "min_length": 50,
-        "purpose": "구도/배치/프레이밍",
-        "forbidden_patterns": []
+      "actions": [
+        { "type": "block" },
+        { "type": "message", "text": "시간 흐름 키워드 감지. 이미지는 한 순간만 담아야 합니다." },
+        { "type": "suggest", "text": "영상으로 전환하려면 avp를 사용하세요." }
+      ]
+    },
+    {
+      "id": "temporal-in-action",
+      "description": "Action Elements 섹션에 시간 키워드 집중 감지",
+      "severity": "error",
+      "match": {
+        "type": "list",
+        "keywords": [
+          "then", "suddenly", "after", "next", "starts to",
+          "begins to", "followed by", "moments later"
+        ],
+        "exceptions": [],
+        "scope": "section:Action Elements"
       },
-      {
-        "name": "Character Details",
-        "marker": "## Character Details",
-        "min_length": 50,
-        "purpose": "캐릭터 외형/의상/표정",
-        "forbidden_patterns": []
+      "actions": [
+        { "type": "block" },
+        { "type": "message", "text": "Action 섹션에 시간 키워드 감지 — 이미지는 한 순간만" }
+      ]
+    },
+    {
+      "id": "section-completeness",
+      "description": "7섹션 완성도 검사",
+      "severity": "warn",
+      "match": {
+        "type": "section_check",
+        "sections": [
+          { "marker": "## Style", "min_length": 50 },
+          { "marker": "## Composition", "min_length": 50 },
+          { "marker": "## Character Details", "min_length": 50 },
+          { "marker": "## Environmental Elements", "min_length": 30 },
+          { "marker": "## Action Elements", "min_length": 30 },
+          { "marker": "## Lighting & Atmosphere", "min_length": 30 },
+          { "marker": "## Technical Details", "min_length": 30 }
+        ]
       },
-      {
-        "name": "Environmental Elements",
-        "marker": "## Environmental Elements",
-        "min_length": 30,
-        "purpose": "환경/배경 디테일",
-        "forbidden_patterns": []
+      "actions": [
+        { "type": "warn" },
+        { "type": "message", "text": "섹션이 누락되었거나 내용이 부족합니다." }
+      ]
+    },
+    {
+      "id": "duplicate-keywords",
+      "description": "섹션 간 중복 키워드 감지",
+      "severity": "info",
+      "match": {
+        "type": "duplicate",
+        "min_word_length": 4,
+        "threshold": 3,
+        "ignore": [
+          "with", "from", "that", "this", "and", "the", "for",
+          "creating", "detailed", "style", "anime", "light", "lighting",
+          "color", "subtle", "soft", "deep", "high", "space", "character",
+          "hair", "eyes", "face", "body", "skin", "helmet", "suit",
+          "cosmic", "camera", "scene", "background", "realistic", "accurate",
+          "visual", "surface", "elements", "floating", "blue", "white", "dark",
+          "warm", "cold", "cool", "bright", "glow", "glowing"
+        ]
       },
-      {
-        "name": "Action Elements",
-        "marker": "## Action Elements",
-        "min_length": 30,
-        "purpose": "동작/포즈 (한 순간만)",
-        "forbidden_patterns": ["temporal_keywords"]
+      "actions": [
+        { "type": "warn" },
+        { "type": "message", "text": "섹션 간 역할 분리를 권장합니다." }
+      ]
+    },
+    {
+      "id": "video-classification",
+      "description": "영상 프롬프트 자동 분류",
+      "severity": "info",
+      "match": {
+        "type": "list",
+        "keywords": [
+          "sequence", "animation", "movement over time", "continuous",
+          "transitions", "camera follows", "tracking shot"
+        ],
+        "exceptions": [],
+        "scope": "all"
       },
-      {
-        "name": "Lighting & Atmosphere",
-        "marker": "## Lighting & Atmosphere",
-        "min_length": 30,
-        "purpose": "조명/분위기",
-        "forbidden_patterns": []
+      "actions": [
+        { "type": "suggest", "text": "이 프롬프트는 영상에 더 적합합니다. avp로 타임라인을 분할하세요." }
+      ]
+    },
+    {
+      "id": "midjourney-ar",
+      "description": "미드저니 --ar 파라미터 검증",
+      "severity": "warn",
+      "match": {
+        "type": "regex",
+        "pattern": "--ar\\s+(\\S+)",
+        "allowed_values": ["1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4", "21:9", "4:5", "5:4"],
+        "scope": "all"
       },
-      {
-        "name": "Technical Details",
-        "marker": "## Technical Details",
-        "min_length": 30,
-        "purpose": "렌더링/퀄리티 수준",
-        "forbidden_patterns": []
-      }
-    ]
-  },
-  "classification": {
-    "description": "이미지 vs 영상 자동 분류",
-    "image_indicators": [
-      "single moment", "frozen", "still", "captured", "portrait",
-      "poster", "sheet", "concept art", "key visual"
-    ],
-    "video_indicators": [
-      "sequence", "animation", "movement over time", "continuous",
-      "transitions", "camera follows", "tracking shot"
-    ],
-    "temporal_found_action": "suggest_video",
-    "message": "이 프롬프트는 영상에 더 적합합니다. avp로 타임라인을 분할하세요."
-  }
+      "actions": [
+        { "type": "warn" },
+        { "type": "message", "text": "지원하지 않는 --ar 비율입니다. 허용: 1:1, 16:9, 9:16, 3:2, 2:3, 4:3, 3:4, 21:9, 4:5, 5:4" }
+      ]
+    },
+    {
+      "id": "midjourney-stylize",
+      "description": "미드저니 --s 파라미터 범위 검증",
+      "severity": "warn",
+      "match": {
+        "type": "regex",
+        "pattern": "--s\\s+(\\d+)",
+        "range": { "min": 0, "max": 1000 },
+        "default": 100,
+        "scope": "all"
+      },
+      "actions": [
+        { "type": "warn" },
+        { "type": "message", "text": "--s 값은 0~1000 범위입니다. 기본값: 100" }
+      ]
+    },
+    {
+      "id": "midjourney-version",
+      "description": "미드저니 --v 파라미터 검증",
+      "severity": "info",
+      "match": {
+        "type": "regex",
+        "pattern": "--v\\s+(\\S+)",
+        "allowed_values": ["5", "5.1", "5.2", "6", "6.1", "7"],
+        "scope": "all"
+      },
+      "actions": [
+        { "type": "info" },
+        { "type": "message", "text": "--v 7 권장. 허용: 5, 5.1, 5.2, 6, 6.1, 7" }
+      ]
+    }
+  ]
 }
