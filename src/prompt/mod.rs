@@ -121,6 +121,23 @@ fn extract_section(text: &str, marker: &str) -> Option<String> {
     })
 }
 
+fn word_boundary_match(haystack: &str, needle: &str) -> bool {
+    let needle_lower = needle.to_lowercase();
+    let hay_lower = haystack.to_lowercase();
+    // 공백이 포함된 구문은 그대로 contains
+    if needle.contains(' ') {
+        return hay_lower.contains(&needle_lower);
+    }
+    // 단일 단어는 단어 경계 체크
+    for (i, _) in hay_lower.match_indices(&needle_lower) {
+        let before = if i == 0 { true } else { !hay_lower.as_bytes()[i - 1].is_ascii_alphanumeric() };
+        let after_pos = i + needle_lower.len();
+        let after = if after_pos >= hay_lower.len() { true } else { !hay_lower.as_bytes()[after_pos].is_ascii_alphanumeric() };
+        if before && after { return true; }
+    }
+    false
+}
+
 fn get_search_text<'a>(text: &'a str, scope: &str) -> String {
     if scope == "all" {
         text.to_lowercase()
@@ -146,8 +163,8 @@ fn validate_prompt_rules(text: &str) -> ValidationResult {
                 let mut found = vec![];
                 for kw in keywords {
                     let kw_lower = kw.to_lowercase();
-                    if search.contains(&kw_lower) {
-                        let is_exception = exceptions.iter().any(|ex| search.contains(&ex.to_lowercase()));
+                    if word_boundary_match(&search, &kw_lower) {
+                        let is_exception = exceptions.iter().any(|ex| word_boundary_match(&search, &ex.to_lowercase()));
                         if !is_exception {
                             found.push(kw.clone());
                         }
