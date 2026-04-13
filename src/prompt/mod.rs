@@ -1,8 +1,201 @@
 use crate::PromptCmd;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 
-const MIDJOURNEY_LIMIT: usize = 1000;
+const MIDJOURNEY_LIMIT: usize = 6000;
+
+// === 규칙 엔진 구조체 ===
+
+#[derive(Deserialize)]
+struct Rules {
+    temporal_keywords: TemporalRules,
+    duplicate_detection: DuplicateRules,
+    sections: SectionRules,
+    classification: ClassificationRules,
+}
+
+#[derive(Deserialize)]
+struct TemporalRules {
+    forbidden: Vec<String>,
+    allowed_exceptions: Vec<String>,
+    action: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct DuplicateRules {
+    min_word_length: usize,
+    ignore_words: Vec<String>,
+    threshold: usize,
+    action: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct SectionRules {
+    required: Vec<SectionDef>,
+}
+
+#[derive(Deserialize)]
+struct SectionDef {
+    name: String,
+    marker: String,
+    min_length: usize,
+    forbidden_patterns: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ClassificationRules {
+    video_indicators: Vec<String>,
+    temporal_found_action: String,
+    message: String,
+}
+
+fn load_rules() -> Option<Rules> {
+    let rules_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("rules/image_prompt.json");
+    let content = fs::read_to_string(&rules_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+#[derive(Default)]
+struct ValidationResult {
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    suggest_video: bool,
+}
+
+fn validate_prompt_rules(text: &str) -> ValidationResult {
+    let mut result = ValidationResult::default();
+    let rules = match load_rules() {
+        Some(r) => r,
+        None => { result.warnings.push("규칙 파일 로드 실패 — 검증 건너뜀".to_string()); return result; }
+    };
+
+    let lower = text.to_lowercase();
+
+    // 1. 시간 흐름 키워드 감지
+    let mut temporal_found = vec![];
+    for kw in &rules.temporal_keywords.forbidden {
+        let kw_lower = kw.to_lowercase();
+        if lower.contains(&kw_lower) {
+            // 예외 확인
+            let is_exception = rules.temporal_keywords.allowed_exceptions.iter()
+                .any(|ex| lower.contains(&ex.to_lowercase()));
+            if !is_exception {
+                temporal_found.push(kw.clone());
+            }
+        }
+    }
+    if !temporal_found.is_empty() {
+        let msg = format!("{} — 감지: [{}]", rules.temporal_keywords.message, temporal_found.join(", "));
+        if rules.temporal_keywords.action == "reject" {
+            result.errors.push(msg);
+        } else {
+            result.warnings.push(msg);
+        }
+        if rules.classification.temporal_found_action == "suggest_video" {
+            result.suggest_video = true;
+        }
+    }
+
+    // 2. 섹션 완성도 검사
+    for section in &rules.sections.required {
+        if !text.contains(&section.marker) {
+            result.warnings.push(format!("섹션 누락: {}", section.name));
+            continue;
+        }
+        // 섹션 내용 추출
+        let after = text.split(&section.marker).nth(1).unwrap_or("");
+        let content = after.split("## ").next().unwrap_or("").trim();
+        if content.is_empty() || content.starts_with('(') {
+            result.warnings.push(format!("섹션 비어있음: {}", section.name));
+        } else if content.len() < section.min_length {
+            result.warnings.push(format!("섹션 너무 짧음: {} ({}자 < 최소 {}자)", section.name, content.len(), section.min_length));
+        }
+
+        // 섹션별 금지 패턴
+        if section.forbidden_patterns.contains(&"temporal_keywords".to_string()) {
+            for kw in &rules.temporal_keywords.forbidden {
+                if content.to_lowercase().contains(&kw.to_lowercase()) {
+                    let is_exception = rules.temporal_keywords.allowed_exceptions.iter()
+                        .any(|ex| content.to_lowercase().contains(&ex.to_lowercase()));
+                    if !is_exception {
+                        result.errors.push(format!("{} 섹션에 시간 키워드 '{}' 감지 — 이미지는 한 순간만", section.name, kw));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 중복 키워드 감지
+    let sections_text: Vec<(&str, &str)> = rules.sections.required.iter()
+        .filter_map(|s| {
+            text.split(&s.marker).nth(1).map(|after| {
+                let content = after.split("## ").next().unwrap_or("");
+                (s.name.as_str(), content)
+            })
+        })
+        .collect();
+
+    let mut word_sections: HashMap<String, Vec<String>> = HashMap::new();
+    for (section_name, content) in &sections_text {
+        let words: Vec<String> = content.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= rules.duplicate_detection.min_word_length)
+            .filter(|w| !rules.duplicate_detection.ignore_words.contains(&w.to_string()))
+            .map(|w| w.to_string())
+            .collect();
+
+        for word in words {
+            word_sections.entry(word).or_default().push(section_name.to_string());
+        }
+    }
+
+    let duplicates: Vec<(String, Vec<String>)> = word_sections.into_iter()
+        .filter(|(_, sections)| {
+            let unique: std::collections::HashSet<_> = sections.iter().collect();
+            unique.len() >= rules.duplicate_detection.threshold
+        })
+        .collect();
+
+    if !duplicates.is_empty() {
+        let dup_list: Vec<String> = duplicates.iter()
+            .map(|(word, secs)| {
+                let unique: std::collections::HashSet<_> = secs.iter().collect();
+                format!("'{}' → {}", word, unique.into_iter().cloned().collect::<Vec<_>>().join(", "))
+            })
+            .collect();
+        result.warnings.push(format!("{} — {}", rules.duplicate_detection.message, dup_list.join("; ")));
+    }
+
+    // 4. 영상 분류 체크
+    for indicator in &rules.classification.video_indicators {
+        if lower.contains(&indicator.to_lowercase()) {
+            result.warnings.push(format!("영상 지표 감지: '{}' — {}", indicator, rules.classification.message));
+        }
+    }
+
+    result
+}
+
+fn print_validation(result: &ValidationResult) {
+    if result.errors.is_empty() && result.warnings.is_empty() {
+        println!("✅ 검증 통과");
+        return;
+    }
+
+    for e in &result.errors {
+        println!("  ❌ {}", e);
+    }
+    for w in &result.warnings {
+        println!("  ⚠️  {}", w);
+    }
+    if result.suggest_video {
+        println!();
+        println!("  💡 이 프롬프트는 영상에 더 적합합니다. `avp`로 타임라인을 분할하세요.");
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct PromptEntry {
@@ -87,6 +280,17 @@ fn save(target: &str, text: &str, memo: Option<String>) {
     println!("{} 프롬프트 저장: {} (v{})", status, target, version);
     println!("   글자수: {}/{}", char_count, MIDJOURNEY_LIMIT);
     if let Some(m) = &entry.memo { println!("   메모: {}", m); }
+
+    // 자동 검증
+    println!();
+    println!("📋 검증:");
+    let validation = validate_prompt_rules(text);
+    print_validation(&validation);
+
+    if !validation.errors.is_empty() {
+        println!();
+        println!("  ⚠️  에러가 있지만 저장은 완료됨. 수정 후 새 버전으로 저장하세요.");
+    }
 
     crate::git::auto_commit(&format!("prompt: {} v{} 저장", target, version));
 }
@@ -223,8 +427,13 @@ fn validate_sheet(content: &str) {
         for m in &missing {
             println!("  ❌ {}", m);
         }
-        println!("  (저장은 진행하지만, 모든 섹션을 채우는 것을 권장합니다.)");
     }
+
+    // JSON 규칙 기반 검증
+    println!();
+    println!("📋 규칙 검증:");
+    let validation = validate_prompt_rules(content);
+    print_validation(&validation);
 }
 
 fn history(target: &str) {
