@@ -142,6 +142,34 @@
       ]
     },
     {
+      "id": "korean-required",
+      "description": "한글 설명 필수. 없으면 다음 세션에서 맥락 소실.",
+      "severity": "error",
+      "match": {
+        "type": "contains_korean",
+        "scope": "all"
+      },
+      "actions": [
+        { "type": "block" },
+        { "type": "message", "text": "한글 설명이 없습니다. 모든 프롬프트는 한글 설명 + 영문 프롬프트를 병행해야 합니다." }
+      ]
+    },
+    {
+      "id": "white-background-asset",
+      "description": "캐릭터/몬스터/오브젝트 단독 에셋은 흰색 배경 필수",
+      "severity": "warn",
+      "match": {
+        "type": "required_if",
+        "trigger_keywords": ["character sheet", "monster", "creature", "object sheet", "weapon", "item", "single character"],
+        "required_keywords": ["white background", "blank background", "clean background"],
+        "scope": "all"
+      },
+      "actions": [
+        { "type": "warn" },
+        { "type": "message", "text": "캐릭터/몬스터/오브젝트 에셋에는 'white background' 필수. 배경이 섞이면 합성이 어려워집니다." }
+      ]
+    },
+    {
       "id": "midjourney-version",
       "description": "미드저니 --v 파라미터 검증",
       "severity": "info",

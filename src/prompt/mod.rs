@@ -55,6 +55,30 @@ enum MatchDef {
         #[serde(default = "default_scope")]
         scope: String,
     },
+    #[serde(rename = "contains_korean")]
+    ContainsKorean {
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
+    #[serde(rename = "required_if")]
+    RequiredIf {
+        trigger_keywords: Vec<String>,
+        required_keywords: Vec<String>,
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
+    #[serde(rename = "required_keywords")]
+    RequiredKeywords {
+        keywords: Vec<String>,
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
+    #[serde(rename = "char_limit")]
+    CharLimit {
+        max: usize,
+        #[serde(default = "default_scope")]
+        scope: String,
+    },
 }
 
 fn default_scope() -> String { "all".to_string() }
@@ -180,6 +204,48 @@ fn validate_prompt_rules(text: &str) -> ValidationResult {
                     let msgs = collect_messages(&rule.actions);
                     push_by_severity(&mut result, &rule.severity,
                         &format!("[{}] {} — {}", rule.id, msgs, dups.join("; ")), &rule.actions);
+                }
+            }
+
+            MatchDef::ContainsKorean { scope } => {
+                let search = get_search_text(text, scope);
+                let has_korean = search.chars().any(|c| ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c));
+                if !has_korean {
+                    let msgs = collect_messages(&rule.actions);
+                    push_by_severity(&mut result, &rule.severity, &format!("[{}] {}", rule.id, msgs), &rule.actions);
+                }
+            }
+
+            MatchDef::RequiredIf { trigger_keywords, required_keywords, scope } => {
+                let search = get_search_text(text, scope);
+                let triggered = trigger_keywords.iter().any(|kw| search.contains(&kw.to_lowercase()));
+                if triggered {
+                    let has_required = required_keywords.iter().any(|kw| search.contains(&kw.to_lowercase()));
+                    if !has_required {
+                        let msgs = collect_messages(&rule.actions);
+                        push_by_severity(&mut result, &rule.severity, &format!("[{}] {}", rule.id, msgs), &rule.actions);
+                    }
+                }
+            }
+
+            MatchDef::RequiredKeywords { keywords, scope } => {
+                let search = get_search_text(text, scope);
+                let missing: Vec<_> = keywords.iter().filter(|kw| !search.contains(&kw.to_lowercase())).collect();
+                if !missing.is_empty() {
+                    let msgs = collect_messages(&rule.actions);
+                    push_by_severity(&mut result, &rule.severity,
+                        &format!("[{}] {} — 누락: [{}]", rule.id, msgs, missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")),
+                        &rule.actions);
+                }
+            }
+
+            MatchDef::CharLimit { max, scope } => {
+                let search = get_search_text(text, scope);
+                if search.len() > *max {
+                    let msgs = collect_messages(&rule.actions);
+                    push_by_severity(&mut result, &rule.severity,
+                        &format!("[{}] {} ({}자 > {}자)", rule.id, msgs, search.len(), max),
+                        &rule.actions);
                 }
             }
 
