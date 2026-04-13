@@ -3,9 +3,82 @@ name: ai-image-director
 description: "AI 이미지 생성 전문 디렉터 스킬. 미드저니를 활용해 캐릭터, 몬스터, 배경, 오브젝트 이미지를 생성한다. 사용자가 캐릭터 디자인, 캐릭터 시트, 몬스터 디자인, 배경 생성, 컨셉아트, 무기 디자인, 아이템 디자인, 포스터, 썸네일, 이미지 프롬프트, 미드저니 등을 언급하면 반드시 이 스킬을 사용해라."
 ---
 
-# 🎨 AI 이미지 디렉터 v1.0
+# 🎨 AI 이미지 디렉터 v2.0
 
 미드저니를 활용해 고퀄리티 이미지 에셋을 생성하는 전문 디렉팅 스킬이다.
+
+---
+
+## 아키텍처
+
+```
+이 스킬 = SKILL.md (디렉팅 규칙) + Rust CLI (aip) + 규칙 엔진 (rules/*.json)
+
+~/.agents/skills/ai-image-package/
+├── SKILL.md              ← 이 파일. Claude가 읽는 디렉팅 규칙.
+├── Cargo.toml + src/     ← Rust CLI (aip). cargo install --path . 로 설치.
+├── rules/
+│   └── image_prompt.json ← 규칙 엔진. type 기반. 코드 수정 없이 규칙 추가/변경.
+└── references/           ← (예정) 에셋별 상세 레퍼런스
+
+작업 디렉토리/
+└── .aip/                 ← 프로젝트 데이터 (libgit2 git + GitHub 자동 push)
+    ├── current
+    └── projects/{이름}/
+        ├── project.json
+        ├── assets/{characters,monsters,backgrounds,objects}/
+        ├── prompts/      ← 버전별 프롬프트 + 7섹션 시트
+        └── confirmed/    ← 확정 이미지
+```
+
+## CLI 커맨드 전체 목록
+
+```
+aip project init <이름> [--style] [--type]   프로젝트 생성 + GitHub 레포 자동 생성
+aip project list                              프로젝트 목록
+aip project use <이름>                        프로젝트 전환
+aip project status                            현재 프로젝트 상태
+aip project style <키워드>                    고정 스타일 접두사 설정
+
+aip asset add <유형> --name <이름> [--image/--url] [--concept] [--keywords]
+aip asset list                                에셋 목록 + 파이프라인 상태
+aip asset show <이름>                         에셋 상세 + 파이프라인 시각화
+aip asset advance <이름>                      파이프라인 다음 단계 (하드 강제)
+aip asset confirm <이름> --image/--url         최종 확정
+aip asset remove <이름>                       삭제
+
+aip prompt sheet <에셋>                       7섹션 빈 템플릿 생성
+aip prompt brief <에셋> [--file/--text]       디렉팅 시트 저장/확인
+aip prompt save <에셋> --text [--memo]        프롬프트 저장 (자동 규칙 검증)
+aip prompt show <에셋>                        최신 프롬프트 보기
+aip prompt check <텍스트>                     글자수 체크
+aip prompt history <에셋>                     프롬프트 버전 이력
+
+aip skill status/push/diff/log               스킬 파일 git 관리
+
+aip status                                    전체 현황
+```
+
+## 규칙 엔진 (rules/image_prompt.json)
+
+프롬프트 저장 시 자동 검증. JSON 파일만 수정하면 코드 재빌드 없이 규칙 변경 가능.
+
+**규칙 type:**
+- `list` — 키워드 목록 매칭 (예: 시간 흐름 금지어)
+- `section_check` — 7섹션 존재 + 최소 길이 검사
+- `duplicate` — 섹션 간 중복 키워드 감지
+- `regex` — 정규식 매칭 (예: --ar, --s, --v 파라미터 범위)
+
+**severity 3단계:**
+- `error` — 반드시 수정 필요 (시간 흐름 등)
+- `warn` — 권고 (섹션 부족, 파라미터 범위 등)
+- `info` — 참고 (중복 키워드 등)
+
+**핵심 규칙:**
+- 이미지에 시간 흐름 → error + "avp로 영상 전환 권고"
+- 7섹션 미완성 → warn
+- 미드저니 --s 0~1000 범위 초과 → warn
+- 영상 지표 감지 → info + 영상 전환 제안
 
 ---
 
