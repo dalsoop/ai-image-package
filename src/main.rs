@@ -1,3 +1,6 @@
+mod config_gen;
+pub use config_gen::*;
+
 mod asset;
 mod git;
 mod project;
@@ -7,13 +10,9 @@ mod skill;
 use clap::{Parser, Subcommand};
 
 /// 바이너리 이름 상수 — 변경 시 여기만 수정
-pub const BIN_NAME: &str = "aip";
 /// 프로젝트 데이터 디렉토리 이름
-pub const PROJECT_DIR: &str = ".aip";
 /// GitHub owner
-pub const GITHUB_OWNER: &str = "dalsoop";
 /// 레포 접두사
-pub const REPO_PREFIX: &str = "aip-";
 
 #[derive(Parser)]
 #[command(name = BIN_NAME)]

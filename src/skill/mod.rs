@@ -49,7 +49,7 @@ fn push(message: Option<String>) {
     index.write().unwrap();
     let tree_oid = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_oid).unwrap();
-    let sig = Signature::now("aip", "aip@local").unwrap();
+    let sig = Signature::now(crate::BIN_NAME, &format!("{}@local", crate::BIN_NAME)).unwrap();
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let msg = message.unwrap_or_else(|| "skill: 스킬 파일 업데이트".to_string());
 

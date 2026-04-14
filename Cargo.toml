@@ -18,4 +18,4 @@ ureq = { version = "3", features = ["rustls"] }
 regex-lite = "0.1"
 
 [build-dependencies]
-hardcoded-lint = { git = "https://github.com/dalsoop/hardcoded-lint" }
+serde_json = "1"

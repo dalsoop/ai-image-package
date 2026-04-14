@@ -15,7 +15,6 @@ dependencies = [
  "chrono",
  "clap",
  "git2",
- "hardcoded-lint",
  "regex-lite",
  "serde",
  "serde_json",
@@ -277,11 +276,6 @@ dependencies = [
  "openssl-sys",
  "url",
 ]
-
-[[package]]
-name = "hardcoded-lint"
-version = "0.1.0"
-source = "git+https://github.com/dalsoop/hardcoded-lint#c943f1f2cd9f9afd94bc8549b15d0824c3c5db53"
 
 [[package]]
 name = "heck"
