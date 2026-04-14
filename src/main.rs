@@ -6,6 +6,7 @@ mod git;
 mod project;
 mod prompt;
 mod skill;
+mod tui;
 
 use clap::{Parser, Subcommand};
 
@@ -46,6 +47,8 @@ enum Commands {
     },
     /// 전체 상태 확인
     Status,
+    /// 3분할 TUI 실행 (프로젝트/에셋/프롬프트/스킬/규칙)
+    Tui,
 }
 
 // === PROJECT ===
@@ -203,6 +206,12 @@ fn main() {
         Commands::Prompt { cmd } => prompt::run(cmd),
         Commands::Skill { cmd } => skill::run(cmd),
         Commands::Status => status(),
+        Commands::Tui => {
+            if let Err(e) = tui::run() {
+                eprintln!("TUI 실행 실패: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 }
 
