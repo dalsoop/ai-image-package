@@ -226,8 +226,9 @@ fn validate_prompt_rules(text: &str) -> ValidationResult {
 
             MatchDef::ContainsKorean { scope } => {
                 let search = get_search_text(text, scope);
+                // 한글이 감지되면 에러 (프롬프트는 순수 영문이어야 함)
                 let has_korean = search.chars().any(|c| ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c));
-                if !has_korean {
+                if has_korean {
                     let msgs = collect_messages(&rule.actions);
                     push_by_severity(&mut result, &rule.severity, &format!("[{}] {}", rule.id, msgs), &rule.actions);
                 }
